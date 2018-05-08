@@ -444,6 +444,11 @@ the `Watermark getCurrentWatermark()` (for periodic) or the
 `Watermark checkAndGetNextWatermark(T lastElement, long extractedTimestamp)` (for punctuated) is called to determine
 if a new watermark should be emitted and with which timestamp.
 
+**Note**: If a watermark assigner depends on records read from Kafka to advance its watermarks (which is commonly the case), all topics and partitions need to have a continuous stream of records. Otherwise, the watermarks of the whole application cannot advance and all time-based operations, such as time windows or functions with timers, cannot make progress. A single idle Kafka partition causes this behavior. 
+A Flink improvement is planned to prevent this from happening 
+(see [FLINK-5479: Per-partition watermarks in FlinkKafkaConsumer should consider idle partitions](
+https://issues.apache.org/jira/browse/FLINK-5479)).
+In the meanwhile, a possible workaround is to send *heartbeat messages* to all consumed partitions that advance the watermarks of idle partitions.
 
 ## Kafka Producer
 
@@ -633,7 +638,7 @@ the consumers until `transaction1` is committed or aborted. This has two implica
 
  * First of all, during normal working of Flink applications, user can expect a delay in visibility
  of the records produced into Kafka topics, equal to average time between completed checkpoints.
- * Secondly in case of Flink application failure, topics into which this application was writting, 
+ * Secondly in case of Flink application failure, topics into which this application was writing,
  will be blocked for the readers until the application restarts or the configured transaction 
  timeout time will pass. This remark only applies for the cases when there are multiple
  agents/applications writing to the same Kafka topic.

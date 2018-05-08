@@ -62,7 +62,7 @@ for JobManager or TaskManager-specific options, respectively.
 
 - `taskmanager.numberOfTaskSlots`: The number of parallel operator or user function instances that a single TaskManager can run (DEFAULT: 1). If this value is larger than 1, a single TaskManager takes multiple instances of a function or operator. That way, the TaskManager can utilize multiple CPU cores, but at the same time, the available memory is divided between the different operator or function instances. This value is typically proportional to the number of physical CPU cores that the TaskManager's machine has (e.g., equal to the number of cores, or half the number of cores). [More about task slots](config.html#configuring-taskmanager-processing-slots).
 
-- `parallelism.default`: The default parallelism to use for programs that have no parallelism specified. (DEFAULT: 1). For setups that have no concurrent jobs running, setting this value to NumTaskManagers * NumSlotsPerTaskManager will cause the system to use all available execution resources for the program's execution. **Note**: The default parallelism can be overwriten for an entire job by calling `setParallelism(int parallelism)` on the `ExecutionEnvironment` or by passing `-p <parallelism>` to the Flink Command-line frontend. It can be overwritten for single transformations by calling `setParallelism(int
+- `parallelism.default`: The default parallelism to use for programs that have no parallelism specified. (DEFAULT: 1). For setups that have no concurrent jobs running, setting this value to NumTaskManagers * NumSlotsPerTaskManager will cause the system to use all available execution resources for the program's execution. **Note**: The default parallelism can be overwritten for an entire job by calling `setParallelism(int parallelism)` on the `ExecutionEnvironment` or by passing `-p <parallelism>` to the Flink Command-line frontend. It can be overwritten for single transformations by calling `setParallelism(int
 parallelism)` on an operator. See [Parallel Execution]({{site.baseurl}}/dev/parallel.html) for more information about parallelism.
 
 - `fs.default-scheme`: The default filesystem scheme to be used, with the necessary authority to contact, e.g. the host:port of the NameNode in the case of HDFS (if needed).
@@ -587,23 +587,23 @@ Previously this key was named `recovery.mode` and the default value was `standal
 
 ### Queryable State
 
-#### Server
+The following configuration parameters influence the behaviour of the queryable state server and client.
+They are defined in `QueryableStateOptions`.
 
-- `query.server.enable`: Enable queryable state (Default: `true`).
+#### State Server
+* `query.server.ports`: the server port range of the queryable state server. This is useful to avoid port clashes if more 
+   than 1 task managers run on the same machine. The specified range can be: a port: "9123", a range of ports: "50100-50200",
+   or a list of ranges and or points: "50100-50200,50300-50400,51234". The default port is 9067.
+* `query.server.network-threads`: number of network (event loop) threads receiving incoming requests for the state server (0 => #slots)
+* `query.server.query-threads`: number of threads handling/serving incoming requests for the state server (0 => #slots).
 
-- `query.server.port`: Port to bind queryable state server to (Default: `0`, binds to random port).
 
-- `query.server.network-threads`: Number of network (Netty's event loop) Threads for queryable state server (Default: `0`, picks number of slots).
-
-- `query.server.query-threads`: Number of query Threads for queryable state server (Default: `0`, picks number of slots).
-
-#### Client
-
-- `query.client.network-threads`: Number of network (Netty's event loop) Threads for queryable state client (Default: `0`, picks number of available cores as returned by `Runtime.getRuntime().availableProcessors()`).
-
-- `query.client.lookup.num-retries`: Number of retries on KvState lookup failure due to unavailable JobManager (Default: `3`).
-
-- `query.client.lookup.retry-delay`: Retry delay in milliseconds on KvState lookup failure due to unavailable JobManager (Default: `1000`).
+#### Proxy
+* `query.proxy.ports`: the server port range of the queryable state proxy. This is useful to avoid port clashes if more 
+  than 1 task managers run on the same machine. The specified range can be: a port: "9123", a range of ports: "50100-50200",
+  or a list of ranges and or points: "50100-50200,50300-50400,51234". The default port is 9069.
+* `query.proxy.network-threads`: number of network (event loop) threads receiving incoming requests for the client proxy (0 => #slots)
+* `query.proxy.query-threads`: number of threads handling/serving incoming requests for the client proxy (0 => #slots).
 
 ### Metrics
 

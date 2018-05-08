@@ -28,6 +28,7 @@ import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.typeutils.ResultTypeQueryable;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.runtime.state.CheckpointListener;
 import org.apache.flink.runtime.state.DefaultOperatorStateBackend;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
@@ -188,6 +189,13 @@ public abstract class FlinkKafkaConsumerBase<T> extends RichParallelSourceFuncti
 	//  internal metrics
 	// ------------------------------------------------------------------------
 
+	/**
+	 * Flag indicating whether or not metrics should be exposed.
+	 * If {@code true}, offset metrics (e.g. current offset, committed offset) and
+	 * Kafka-shipped metrics will be registered.
+	 */
+	private final boolean useMetrics;
+
 	/** Counter for successful Kafka offset commits. */
 	private transient Counter successfulCommits;
 
@@ -217,7 +225,8 @@ public abstract class FlinkKafkaConsumerBase<T> extends RichParallelSourceFuncti
 			List<String> topics,
 			Pattern topicPattern,
 			KeyedDeserializationSchema<T> deserializer,
-			long discoveryIntervalMillis) {
+			long discoveryIntervalMillis,
+			boolean useMetrics) {
 		this.topicsDescriptor = new KafkaTopicsDescriptor(topics, topicPattern);
 		this.deserializer = checkNotNull(deserializer, "valueDeserializer");
 
@@ -225,6 +234,8 @@ public abstract class FlinkKafkaConsumerBase<T> extends RichParallelSourceFuncti
 			discoveryIntervalMillis == PARTITION_DISCOVERY_DISABLED || discoveryIntervalMillis >= 0,
 			"Cannot define a negative value for the topic / partition discovery interval.");
 		this.discoveryIntervalMillis = discoveryIntervalMillis;
+
+		this.useMetrics = useMetrics;
 	}
 
 	// ------------------------------------------------------------------------
@@ -545,20 +556,20 @@ public abstract class FlinkKafkaConsumerBase<T> extends RichParallelSourceFuncti
 			sourceContext.markAsTemporarilyIdle();
 		}
 
-		// create the fetcher that will communicate with the Kafka brokers
-		final AbstractFetcher<T, ?> fetcher = createFetcher(
+		// from this point forward:
+		//   - 'snapshotState' will draw offsets from the fetcher,
+		//     instead of being built from `subscribedPartitionsToStartOffsets`
+		//   - 'notifyCheckpointComplete' will start to do work (i.e. commit offsets to
+		//     Kafka through the fetcher, if configured to do so)
+		this.kafkaFetcher = createFetcher(
 				sourceContext,
 				subscribedPartitionsToStartOffsets,
 				periodicWatermarkAssigner,
 				punctuatedWatermarkAssigner,
 				(StreamingRuntimeContext) getRuntimeContext(),
-				offsetCommitMode);
-
-		// publish the reference, for snapshot-, commit-, and cancel calls
-		// IMPORTANT: We can only do that now, because only now will calls to
-		//            the fetchers 'snapshotCurrentState()' method return at least
-		//            the restored offsets
-		this.kafkaFetcher = fetcher;
+				offsetCommitMode,
+				getRuntimeContext().getMetricGroup().addGroup("KafkaConsumer"),
+				useMetrics);
 
 		if (!running) {
 			return;
@@ -585,7 +596,7 @@ public abstract class FlinkKafkaConsumerBase<T> extends RichParallelSourceFuncti
 
 						while (running) {
 							if (LOG.isDebugEnabled()) {
-								LOG.debug("Consumer subtask {} is trying to discover new partitions ...");
+								LOG.debug("Consumer subtask {} is trying to discover new partitions ...", getRuntimeContext().getIndexOfThisSubtask());
 							}
 
 							try {
@@ -598,7 +609,7 @@ public abstract class FlinkKafkaConsumerBase<T> extends RichParallelSourceFuncti
 
 							// no need to add the discovered partitions if we were closed during the meantime
 							if (running && !discoveredPartitions.isEmpty()) {
-								fetcher.addDiscoveredPartitions(discoveredPartitions);
+								kafkaFetcher.addDiscoveredPartitions(discoveredPartitions);
 							}
 
 							// do not waste any time sleeping if we're not running anymore
@@ -615,13 +626,16 @@ public abstract class FlinkKafkaConsumerBase<T> extends RichParallelSourceFuncti
 						discoveryLoopErrorRef.set(e);
 					} finally {
 						// calling cancel will also let the fetcher loop escape
-						cancel();
+						// (if not running, cancel() was already called)
+						if (running) {
+							cancel();
+						}
 					}
 				}
 			});
 
 			discoveryLoopThread.start();
-			fetcher.runFetchLoop();
+			kafkaFetcher.runFetchLoop();
 
 			// --------------------------------------------------------------------
 
@@ -638,7 +652,7 @@ public abstract class FlinkKafkaConsumerBase<T> extends RichParallelSourceFuncti
 			// won't be using the discoverer
 			partitionDiscoverer.close();
 
-			fetcher.runFetchLoop();
+			kafkaFetcher.runFetchLoop();
 		}
 	}
 
@@ -837,7 +851,9 @@ public abstract class FlinkKafkaConsumerBase<T> extends RichParallelSourceFuncti
 			SerializedValue<AssignerWithPeriodicWatermarks<T>> watermarksPeriodic,
 			SerializedValue<AssignerWithPunctuatedWatermarks<T>> watermarksPunctuated,
 			StreamingRuntimeContext runtimeContext,
-			OffsetCommitMode offsetCommitMode) throws Exception;
+			OffsetCommitMode offsetCommitMode,
+			MetricGroup kafkaMetricGroup,
+			boolean useMetrics) throws Exception;
 
 	/**
 	 * Creates the partition discoverer that is used to find new partitions for this subtask.
@@ -881,5 +897,10 @@ public abstract class FlinkKafkaConsumerBase<T> extends RichParallelSourceFuncti
 	@VisibleForTesting
 	OffsetCommitMode getOffsetCommitMode() {
 		return offsetCommitMode;
+	}
+
+	@VisibleForTesting
+	LinkedMap getPendingOffsetsToCommit() {
+		return pendingOffsetsToCommit;
 	}
 }

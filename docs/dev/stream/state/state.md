@@ -331,8 +331,7 @@ the basic even-split redistribution list state:
 {% highlight java %}
 public class BufferingSink
         implements SinkFunction<Tuple2<String, Integer>>,
-                   CheckpointedFunction,
-                   CheckpointedRestoring<ArrayList<Tuple2<String, Integer>>> {
+                   CheckpointedFunction {
 
     private final int threshold;
 
@@ -379,12 +378,6 @@ public class BufferingSink
             }
         }
     }
-
-    @Override
-    public void restoreState(ArrayList<Tuple2<String, Integer>> state) throws Exception {
-        // this is from the CheckpointedRestoring interface.
-        this.bufferedElements.addAll(state);
-    }
 }
 {% endhighlight %}
 </div>
@@ -393,8 +386,7 @@ public class BufferingSink
 {% highlight scala %}
 class BufferingSink(threshold: Int = 0)
   extends SinkFunction[(String, Int)]
-    with CheckpointedFunction
-    with CheckpointedRestoring[List[(String, Int)]] {
+    with CheckpointedFunction {
 
   @transient
   private var checkpointedState: ListState[(String, Int)] = _
@@ -433,9 +425,6 @@ class BufferingSink(threshold: Int = 0)
     }
   }
 
-  override def restoreState(state: List[(String, Int)]): Unit = {
-    bufferedElements ++= state
-  }
 }
 {% endhighlight %}
 </div>
