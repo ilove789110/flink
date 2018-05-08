@@ -45,7 +45,7 @@ import org.apache.flink.python.api.functions.util.StringDeserializerMap;
 import org.apache.flink.python.api.functions.util.StringTupleDeserializerMap;
 import org.apache.flink.python.api.streaming.plan.PythonPlanStreamer;
 import org.apache.flink.python.api.util.SetCache;
-import org.apache.flink.runtime.filecache.FileCache;
+import org.apache.flink.util.FileUtils;
 import org.apache.flink.util.IOUtils;
 
 import org.slf4j.Logger;
@@ -182,10 +182,7 @@ public class PythonPlanBinder {
 
 				receivePlan(env);
 
-				// upload files to remote FS and register on Distributed Cache
-				deleteIfExists(tmpDistributedDir);
-				FileCache.copy(tmpPlanFilesPath, tmpDistributedDir, true);
-				env.registerCachedFile(tmpDistributedDir.toUri().toString(), FLINK_PYTHON_DC_ID);
+				env.registerCachedFile(tmpPlanFilesPath.toUri().toString(), FLINK_PYTHON_DC_ID, true);
 
 				JobExecutionResult jer = env.execute();
 				long runtime = jer.getNetRuntime();
@@ -197,9 +194,6 @@ public class PythonPlanBinder {
 		} finally {
 			try {
 				// clean up created files
-				FileSystem distributedFS = tmpDistributedDir.getFileSystem();
-				distributedFS.delete(tmpDistributedDir, true);
-
 				FileSystem local = FileSystem.getLocalFileSystem();
 				local.delete(new Path(tmpPlanFilesDir), true);
 			} catch (IOException ioe) {
@@ -215,29 +209,29 @@ public class PythonPlanBinder {
 	private static void unzipPythonLibrary(Path targetDir) throws IOException {
 		FileSystem targetFs = targetDir.getFileSystem();
 		ClassLoader classLoader = PythonPlanBinder.class.getClassLoader();
-		ZipInputStream zis = new ZipInputStream(classLoader.getResourceAsStream("python-source.zip"));
-		ZipEntry entry = zis.getNextEntry();
-		while (entry != null) {
-			String fileName = entry.getName();
-			Path newFile = new Path(targetDir, fileName);
-			if (entry.isDirectory()) {
-				targetFs.mkdirs(newFile);
-			} else {
-				try {
-					LOG.debug("Unzipping to {}.", newFile);
-					FSDataOutputStream fsDataOutputStream = targetFs.create(newFile, FileSystem.WriteMode.NO_OVERWRITE);
-					IOUtils.copyBytes(zis, fsDataOutputStream, false);
-				} catch (Exception e) {
-					zis.closeEntry();
-					zis.close();
-					throw new IOException("Failed to unzip flink python library.", e);
+		try (ZipInputStream zis = new ZipInputStream(classLoader.getResourceAsStream("python-source.zip"))) {
+			ZipEntry entry = zis.getNextEntry();
+			while (entry != null) {
+				String fileName = entry.getName();
+				Path newFile = new Path(targetDir, fileName);
+				if (entry.isDirectory()) {
+					targetFs.mkdirs(newFile);
+				} else {
+					try {
+						LOG.debug("Unzipping to {}.", newFile);
+						FSDataOutputStream fsDataOutputStream = targetFs.create(newFile, FileSystem.WriteMode.NO_OVERWRITE);
+						IOUtils.copyBytes(zis, fsDataOutputStream, false);
+					} catch (Exception e) {
+						zis.closeEntry();
+						throw new IOException("Failed to unzip flink python library.", e);
+					}
 				}
-			}
 
+				zis.closeEntry();
+				entry = zis.getNextEntry();
+			}
 			zis.closeEntry();
-			entry = zis.getNextEntry();
 		}
-		zis.closeEntry();
 	}
 
 	//=====Setup========================================================================================================
@@ -252,7 +246,7 @@ public class PythonPlanBinder {
 	private static void copyFile(Path source, Path targetDirectory, String name) throws IOException {
 		Path targetFilePath = new Path(targetDirectory, name);
 		deleteIfExists(targetFilePath);
-		FileCache.copy(source, targetFilePath, true);
+		FileUtils.copy(source, targetFilePath, true);
 	}
 
 	//====Plan==========================================================================================================

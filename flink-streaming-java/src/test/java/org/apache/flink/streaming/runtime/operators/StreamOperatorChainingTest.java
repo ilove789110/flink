@@ -26,6 +26,7 @@ import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.operators.testutils.MockEnvironment;
 import org.apache.flink.runtime.operators.testutils.MockInputSplitProvider;
+import org.apache.flink.runtime.state.TestTaskStateManager;
 import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SplitStream;
@@ -149,8 +150,7 @@ public class StreamOperatorChainingTest {
 
 		try (MockEnvironment environment = createMockEnvironment(chainedVertex.getName())) {
 			StreamTask<Integer, StreamMap<Integer, Integer>> mockTask = createMockTask(streamConfig, environment);
-
-			OperatorChain<Integer, StreamMap<Integer, Integer>> operatorChain = new OperatorChain<>(mockTask);
+			OperatorChain<Integer, StreamMap<Integer, Integer>> operatorChain = createOperatorChain(streamConfig, environment, mockTask);
 
 			headOperator.setup(mockTask, streamConfig, operatorChain.getChainEntryPoint());
 
@@ -170,7 +170,12 @@ public class StreamOperatorChainingTest {
 	}
 
 	private MockEnvironment createMockEnvironment(String taskName) {
-		return new MockEnvironment(taskName, 3 * 1024 * 1024, new MockInputSplitProvider(), 1024);
+		return new MockEnvironment(
+			taskName,
+			3 * 1024 * 1024,
+			new MockInputSplitProvider(),
+			1024,
+			new TestTaskStateManager());
 	}
 
 	@Test
@@ -294,8 +299,7 @@ public class StreamOperatorChainingTest {
 
 		try (MockEnvironment environment = createMockEnvironment(chainedVertex.getName())) {
 			StreamTask<Integer, StreamMap<Integer, Integer>> mockTask = createMockTask(streamConfig, environment);
-
-			OperatorChain<Integer, StreamMap<Integer, Integer>> operatorChain = new OperatorChain<>(mockTask);
+			OperatorChain<Integer, StreamMap<Integer, Integer>> operatorChain = createOperatorChain(streamConfig, environment, mockTask);
 
 			headOperator.setup(mockTask, streamConfig, operatorChain.getChainEntryPoint());
 
@@ -313,6 +317,13 @@ public class StreamOperatorChainingTest {
 			assertThat(sink2Results, contains("First 2: 1"));
 			assertThat(sink3Results, contains("Second: 2", "Second: 3"));
 		}
+	}
+
+	private <IN, OT extends StreamOperator<IN>> OperatorChain<IN, OT> createOperatorChain(
+			StreamConfig streamConfig,
+			Environment environment,
+			StreamTask<IN, OT> task) {
+		return new OperatorChain<>(task, StreamTask.createStreamRecordWriters(streamConfig, environment));
 	}
 
 	private <IN, OT extends StreamOperator<IN>> StreamTask<IN, OT> createMockTask(

@@ -22,6 +22,7 @@ import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.runtime.blob.TransientBlobKey;
 import org.apache.flink.runtime.clusterframework.ApplicationStatus;
 import org.apache.flink.runtime.clusterframework.messages.InfoMessage;
 import org.apache.flink.runtime.clusterframework.types.AllocationID;
@@ -30,6 +31,7 @@ import org.apache.flink.runtime.clusterframework.types.ResourceIDRetrievable;
 import org.apache.flink.runtime.clusterframework.types.ResourceProfile;
 import org.apache.flink.runtime.clusterframework.types.SlotID;
 import org.apache.flink.runtime.concurrent.FutureUtils;
+import org.apache.flink.runtime.entrypoint.ClusterInformation;
 import org.apache.flink.runtime.heartbeat.HeartbeatListener;
 import org.apache.flink.runtime.heartbeat.HeartbeatManager;
 import org.apache.flink.runtime.heartbeat.HeartbeatServices;
@@ -48,6 +50,7 @@ import org.apache.flink.runtime.metrics.MetricRegistry;
 import org.apache.flink.runtime.metrics.dump.MetricQueryService;
 import org.apache.flink.runtime.registration.RegistrationResponse;
 import org.apache.flink.runtime.resourcemanager.exceptions.ResourceManagerException;
+import org.apache.flink.runtime.resourcemanager.exceptions.UnknownTaskExecutorException;
 import org.apache.flink.runtime.resourcemanager.registration.JobManagerRegistration;
 import org.apache.flink.runtime.resourcemanager.registration.WorkerRegistration;
 import org.apache.flink.runtime.resourcemanager.slotmanager.ResourceActions;
@@ -57,11 +60,14 @@ import org.apache.flink.runtime.rest.messages.taskmanager.TaskManagerInfo;
 import org.apache.flink.runtime.rpc.FatalErrorHandler;
 import org.apache.flink.runtime.rpc.FencedRpcEndpoint;
 import org.apache.flink.runtime.rpc.RpcService;
+import org.apache.flink.runtime.taskexecutor.FileType;
 import org.apache.flink.runtime.taskexecutor.SlotReport;
 import org.apache.flink.runtime.taskexecutor.TaskExecutorGateway;
 import org.apache.flink.runtime.taskexecutor.TaskExecutorRegistrationSuccess;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FlinkException;
+
+import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -128,6 +134,8 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 	/** The slot manager maintains the available slots. */
 	private final SlotManager slotManager;
 
+	private final ClusterInformation clusterInformation;
+
 	/** The service to elect a ResourceManager leader. */
 	private LeaderElectionService leaderElectionService;
 
@@ -144,6 +152,7 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 			SlotManager slotManager,
 			MetricRegistry metricRegistry,
 			JobLeaderIdService jobLeaderIdService,
+			ClusterInformation clusterInformation,
 			FatalErrorHandler fatalErrorHandler) {
 
 		super(rpcService, resourceManagerEndpointId);
@@ -154,6 +163,7 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 		this.slotManager = checkNotNull(slotManager);
 		this.metricRegistry = checkNotNull(metricRegistry);
 		this.jobLeaderIdService = checkNotNull(jobLeaderIdService);
+		this.clusterInformation = checkNotNull(clusterInformation);
 		this.fatalErrorHandler = checkNotNull(fatalErrorHandler);
 
 		this.taskManagerHeartbeatManager = heartbeatServices.createHeartbeatManagerSender(
@@ -203,7 +213,7 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 	}
 
 	@Override
-	public void postStop() throws Exception {
+	public CompletableFuture<Void> postStop() {
 		Exception exception = null;
 
 		taskManagerHeartbeatManager.stop();
@@ -230,14 +240,11 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 
 		clearState();
 
-		try {
-			super.postStop();
-		} catch (Exception e) {
-			exception = ExceptionUtils.firstOrSuppressed(e, exception);
-		}
-
 		if (exception != null) {
-			ExceptionUtils.rethrowException(exception, "Error while shutting the ResourceManager down.");
+			return FutureUtils.completedExceptionally(
+				new FlinkException("Could not properly shut down the ResourceManager.", exception));
+		} else {
+			return CompletableFuture.completedFuture(null);
 		}
 	}
 
@@ -479,17 +486,21 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 	 * Cleanup application and shut down cluster.
 	 *
 	 * @param finalStatus of the Flink application
-	 * @param optionalDiagnostics for the Flink application
+	 * @param diagnostics diagnostics message for the Flink application or {@code null}
 	 */
 	@Override
-	public void shutDownCluster(final ApplicationStatus finalStatus, final String optionalDiagnostics) {
-		log.info("Shut down cluster because application is in {}, diagnostics {}.", finalStatus, optionalDiagnostics);
+	public CompletableFuture<Acknowledge> deregisterApplication(
+			final ApplicationStatus finalStatus,
+			@Nullable final String diagnostics) {
+		log.info("Shut down cluster because application is in {}, diagnostics {}.", finalStatus, diagnostics);
 
 		try {
-			shutDownApplication(finalStatus, optionalDiagnostics);
+			internalDeregisterApplication(finalStatus, diagnostics);
 		} catch (ResourceManagerException e) {
 			log.warn("Could not properly shutdown the application.", e);
 		}
+
+		return CompletableFuture.completedFuture(Acknowledge.get());
 	}
 
 	@Override
@@ -523,10 +534,10 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 	@Override
 	public CompletableFuture<TaskManagerInfo> requestTaskManagerInfo(ResourceID resourceId, Time timeout) {
 
-		WorkerRegistration<WorkerType> taskExecutor = taskExecutors.get(resourceId);
+		final WorkerRegistration<WorkerType> taskExecutor = taskExecutors.get(resourceId);
 
 		if (taskExecutor == null) {
-			return FutureUtils.completedExceptionally(new FlinkException("Requested TaskManager " + resourceId + " is not registered."));
+			return FutureUtils.completedExceptionally(new UnknownTaskExecutorException(resourceId));
 		} else {
 			final InstanceID instanceId = taskExecutor.getInstanceID();
 			final TaskManagerInfo taskManagerInfo = new TaskManagerInfo(
@@ -569,6 +580,20 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 		}
 
 		return CompletableFuture.completedFuture(metricQueryServicePaths);
+	}
+
+	@Override
+	public CompletableFuture<TransientBlobKey> requestTaskManagerFileUpload(ResourceID taskManagerId, FileType fileType, Time timeout) {
+		log.debug("Request file {} upload from TaskExecutor {}.", fileType, taskManagerId);
+
+		final WorkerRegistration<WorkerType> taskExecutor = taskExecutors.get(taskManagerId);
+
+		if (taskExecutor == null) {
+			log.debug("Requested file {} upload from unregistered TaskExecutor {}.", fileType, taskManagerId);
+			return FutureUtils.completedExceptionally(new UnknownTaskExecutorException(taskManagerId));
+		} else {
+			return taskExecutor.getTaskExecutorGateway().requestFileUpload(fileType, timeout);
+		}
 	}
 
 	// ------------------------------------------------------------------------
@@ -659,7 +684,7 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 		WorkerRegistration<WorkerType> oldRegistration = taskExecutors.remove(taskExecutorResourceId);
 		if (oldRegistration != null) {
 			// TODO :: suggest old taskExecutor to stop itself
-			log.info("Replacing old instance of worker for ResourceID {}", taskExecutorResourceId);
+			log.info("Replacing old registration of TaskExecutor {}.", taskExecutorResourceId);
 
 			// remove old task manager registration from slot manager
 			slotManager.unregisterTaskManager(oldRegistration.getInstanceID());
@@ -695,7 +720,8 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 			return new TaskExecutorRegistrationSuccess(
 				registration.getInstanceID(),
 				resourceId,
-				resourceManagerConfiguration.getHeartbeatInterval().toMilliseconds());
+				resourceManagerConfiguration.getHeartbeatInterval().toMilliseconds(),
+				clusterInformation);
 		}
 	}
 
@@ -755,14 +781,14 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 		WorkerRegistration<WorkerType> workerRegistration = taskExecutors.remove(resourceID);
 
 		if (workerRegistration != null) {
-			log.info("Task manager {} failed because {}.", resourceID, cause.getMessage());
+			log.info("Closing TaskExecutor connection {} because: {}", resourceID, cause.getMessage());
 
 			// TODO :: suggest failed task executor to stop itself
 			slotManager.unregisterTaskManager(workerRegistration.getInstanceID());
 
 			workerRegistration.getTaskExecutorGateway().disconnectResourceManager(cause);
 		} else {
-			log.debug("Could not find a registered task manager with the process id {}.", resourceID);
+			log.debug("No open TaskExecutor connection {}. Ignoring close TaskExecutor connection.", resourceID);
 		}
 	}
 
@@ -792,7 +818,7 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 		}
 	}
 
-	protected void releaseResource(InstanceID instanceId) {
+	protected void releaseResource(InstanceID instanceId, Exception cause) {
 		WorkerType worker = null;
 
 		// TODO: Improve performance by having an index on the instanceId
@@ -805,10 +831,9 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 
 		if (worker != null) {
 			if (stopWorker(worker)) {
-				closeTaskManagerConnection(worker.getResourceID(),
-						new FlinkException("Worker was stopped."));
+				closeTaskManagerConnection(worker.getResourceID(), cause);
 			} else {
-				log.debug("Worker {} was not stopped.", worker.getResourceID());
+				log.debug("Worker {} could not be stopped.", worker.getResourceID());
 			}
 		} else {
 			// unregister in order to clean up potential left over state
@@ -864,7 +889,7 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 	public void grantLeadership(final UUID newLeaderSessionID) {
 		runAsyncWithoutFencing(
 			() -> {
-				final ResourceManagerId newResourceManagerId = new ResourceManagerId(newLeaderSessionID);
+				final ResourceManagerId newResourceManagerId = ResourceManagerId.fromUuid(newLeaderSessionID);
 
 				log.info("ResourceManager {} was granted leadership with fencing token {}", getAddress(), newResourceManagerId);
 
@@ -923,17 +948,19 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 	protected abstract void initialize() throws ResourceManagerException;
 
 	/**
-	 * The framework specific code for shutting down the application. This should report the
+	 * The framework specific code to deregister the application. This should report the
 	 * application's final status and shut down the resource manager cleanly.
 	 *
 	 * <p>This method also needs to make sure all pending containers that are not registered
 	 * yet are returned.
 	 *
 	 * @param finalStatus The application status to report.
-	 * @param optionalDiagnostics An optional diagnostics message.
+	 * @param optionalDiagnostics A diagnostics message or {@code null}.
 	 * @throws ResourceManagerException if the application could not be shut down.
 	 */
-	protected abstract void shutDownApplication(ApplicationStatus finalStatus, String optionalDiagnostics) throws ResourceManagerException;
+	protected abstract void internalDeregisterApplication(
+		ApplicationStatus finalStatus,
+		@Nullable String optionalDiagnostics) throws ResourceManagerException;
 
 	/**
 	 * Allocates a resource using the resource profile.
@@ -964,10 +991,10 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 	private class ResourceActionsImpl implements ResourceActions {
 
 		@Override
-		public void releaseResource(InstanceID instanceId) {
+		public void releaseResource(InstanceID instanceId, Exception cause) {
 			validateRunsInMainThread();
 
-			ResourceManager.this.releaseResource(instanceId);
+			ResourceManager.this.releaseResource(instanceId, cause);
 		}
 
 		@Override
@@ -1050,7 +1077,7 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 		}
 
 		@Override
-		public CompletableFuture<Void> retrievePayload() {
+		public CompletableFuture<Void> retrievePayload(ResourceID resourceID) {
 			return CompletableFuture.completedFuture(null);
 		}
 	}
@@ -1083,7 +1110,7 @@ public abstract class ResourceManager<WorkerType extends ResourceIDRetrievable>
 		}
 
 		@Override
-		public CompletableFuture<Void> retrievePayload() {
+		public CompletableFuture<Void> retrievePayload(ResourceID resourceID) {
 			return CompletableFuture.completedFuture(null);
 		}
 	}

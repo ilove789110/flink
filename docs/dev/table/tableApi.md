@@ -491,6 +491,7 @@ val result = orders.distinct()
       <td>
         <strong>Inner Join</strong><br>
         <span class="label label-primary">Batch</span>
+        <span class="label label-primary">Streaming</span>
       </td>
       <td>
         <p>Similar to a SQL JOIN clause. Joins two tables. Both tables must have distinct field names and at least one equality join predicate must be defined through join operator or using a where or filter operator.</p>
@@ -499,6 +500,7 @@ Table left = tableEnv.fromDataSet(ds1, "a, b, c");
 Table right = tableEnv.fromDataSet(ds2, "d, e, f");
 Table result = left.join(right).where("a = d").select("a, b, e");
 {% endhighlight %}
+<p><b>Note:</b> For streaming queries the required state to compute the query result might grow infinitely depending on the number of distinct input rows. Please provide a query configuration with valid retention interval to prevent excessive state size. See <a href="streaming.html">Streaming Concepts</a> for details.</p>
       </td>
     </tr>
 
@@ -535,8 +537,6 @@ Table fullOuterResult = left.fullOuterJoin(right, "a = d").select("a, b, e");
           <li><code>ltime &gt;= rtime &amp;&amp; ltime &lt; rtime + 10.minutes</code></li>
         </ul>
         
-        <p><b>Note:</b> Currently, only <code>INNER</code> time-windowed joins are supported.</p>
-
 {% highlight java %}
 Table left = tableEnv.fromDataSet(ds1, "a, b, c, ltime.rowtime");
 Table right = tableEnv.fromDataSet(ds2, "d, e, f, rtime.rowtime");
@@ -652,8 +652,6 @@ val fullOuterResult = left.fullOuterJoin(right, 'a === 'd).select('a, 'b, 'e)
           <li><code>'ltime === 'rtime</code></li>
           <li><code>'ltime &gt;= 'rtime &amp;&amp; 'ltime &lt; 'rtime + 10.minutes</code></li>
         </ul>
-        
-        <p><b>Note:</b> Currently, only <code>INNER</code> time-windowed joins are supported.</p>
 
 {% highlight scala %}
 val left = ds1.toTable(tableEnv, 'a, 'b, 'c, 'ltime.rowtime)
@@ -2032,6 +2030,19 @@ NUMERIC.log10()
         <p>Calculates the base 10 logarithm of given value.</p>
       </td>
     </tr>
+    
+    <tr>
+      <td>
+        {% highlight java %}
+numeric1.log()
+numeric1.log(numeric2)
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Calculates the logarithm of a given numeric value.</p>
+        <p>If called without a parameter, this function returns the natural logarithm of <code>numeric1</code>. If called with a parameter <code>numeric2</code>, this function returns the logarithm of <code>numeric1</code> to the base <code>numeric2</code>. <code>numeric1</code> must be greater than 0. <code>numeric2</code> must be greater than 1.</p>
+      </td>
+    </tr>
 
     <tr>
       <td>
@@ -2252,6 +2263,17 @@ randInteger(seed integer, bound integer)
       <p>Returns a pseudorandom integer value between 0.0 (inclusive) and the specified value (exclusive) with a initial seed. Two randInteger functions will return identical sequences of numbers if they have same initial seed and same bound.</p>
     </td>
    </tr>
+
+    <tr>
+     <td>
+       {% highlight java %}
+NUMERIC.bin()
+{% endhighlight %}
+     </td>
+    <td>
+      <p>Returns a string representation of an integer numeric value in binary format. Returns null if <i>numeric</i> is null. E.g. "4" leads to "100", "12" leads to "1100".</p>
+    </td>
+   </tr>
     
   </tbody>
 </table>
@@ -2381,6 +2403,31 @@ STRING.initCap()
         <p>Converts the initial letter of each word in a string to uppercase. Assumes a string containing only [A-Za-z0-9], everything else is treated as whitespace.</p>
       </td>
     </tr>
+
+    <tr>
+      <td>
+        {% highlight java %}
+STRING.lpad(len INT, pad STRING)
+{% endhighlight %}
+      </td>
+
+      <td>
+        <p>Returns a string left-padded with the given pad string to a length of len characters. If the string is longer than len, the return value is shortened to len characters. E.g. "hi".lpad(4, '??') returns "??hi",  "hi".lpad(1, '??') returns "h".</p>
+      </td>
+    </tr>
+
+    <tr>
+      <td>
+        {% highlight java %}
+STRING.rpad(len INT, pad STRING)
+{% endhighlight %}
+      </td>
+
+      <td>
+        <p>Returns a string right-padded with the given pad string to a length of len characters. If the string is longer than len, the return value is shortened to len characters. E.g. "hi".rpad(4, '??') returns "hi??",  "hi".rpad(1, '??') returns "h".</p>
+      </td>
+    </tr>
+
     <tr>
       <td>
         {% highlight text %}
@@ -2851,6 +2898,17 @@ FIELD.varSamp
       </td>
     </tr>
 
+    <tr>
+      <td>
+        {% highlight java %}
+FIELD.collect
+        {% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the multiset aggregate of the input value.</p>
+      </td>
+    </tr>
+
     </tbody>
 </table>
 
@@ -2991,6 +3049,52 @@ MAP.at(ANY)
     </tr>
 
   </tbody>
+</table>
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style="width: 40%">Hash functions</th>
+      <th class="text-center">Description</th>
+    </tr>
+  </thead>
+  
+  <tbody>
+
+    <tr>
+      <td>
+        {% highlight java %}
+STRING.md5()
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the MD5 hash of the string argument as a string of 32 hexadecimal digits; null if <i>string</i> is null.</p>
+      </td>
+    </tr>
+
+    <tr>
+      <td>
+        {% highlight java %}
+STRING.sha1()
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the SHA-1 hash of the string argument as a string of 40 hexadecimal digits; null if <i>string</i> is null.</p>
+      </td>
+    </tr>
+
+        <tr>
+      <td>
+        {% highlight java %}
+STRING.sha256()
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the SHA-256 hash of the string argument as a string of 64 hexadecimal digits; null if <i>string</i> is null.</p>
+      </td>
+    </tr>
+
+    </tbody>
 </table>
 
 <table class="table table-bordered">
@@ -3424,6 +3528,19 @@ NUMERIC.log10()
     <tr>
       <td>
         {% highlight scala %}
+numeric1.log()
+numeric1.log(numeric2)
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Calculates the logarithm of a given numeric value.</p>
+        <p>If called without a parameter, this function returns the natural logarithm of <code>numeric1</code>. If called with a parameter <code>numeric2</code>, this function returns the logarithm of <code>numeric1</code> to the base <code>numeric2</code>. <code>numeric1</code> must be greater than 0. <code>numeric2</code> must be greater than 1.</p>
+      </td>
+    </tr>
+
+    <tr>
+      <td>
+        {% highlight scala %}
 NUMERIC.exp()
 {% endhighlight %}
       </td>
@@ -3638,6 +3755,17 @@ randInteger(seed integer, bound integer)
      </td>
     <td>
       <p>Returns a pseudorandom integer value between 0.0 (inclusive) and the specified value (exclusive) with a initial seed. Two randInteger functions will return identical sequences of numbers if they have same initial seed and same bound.</p>
+    </td>
+   </tr>
+
+    <tr>
+     <td>
+       {% highlight scala %}
+NUMERIC.bin()
+{% endhighlight %}
+     </td>
+    <td>
+      <p>Returns a string representation of an integer numeric value in binary format. Returns null if <i>numeric</i> is null. E.g. "4" leads to "100", "12" leads to "1100".</p>
     </td>
    </tr>
 
@@ -4203,6 +4331,17 @@ FIELD.varSamp
         <p>Returns the sample variance (square of the sample standard deviation) of the numeric field across all input values.</p>
       </td>
     </tr>
+
+    <tr>
+      <td>
+        {% highlight scala %}
+FIELD.collect
+        {% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the multiset aggregate of the input value.</p>
+      </td>
+    </tr>
   </tbody>
 </table>
 
@@ -4357,6 +4496,53 @@ MAP.at(ANY)
   </tbody>
 </table>
 
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style="width: 40%">Hash functions</th>
+      <th class="text-center">Description</th>
+    </tr>
+  </thead>
+  
+  <tbody>
+
+    <tr>
+      <td>
+        {% highlight scala %}
+STRING.md5()
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the MD5 hash of the string argument as a string of 32 hexadecimal digits; null if <i>string</i> is null.</p>
+      </td>
+    </tr>
+
+    <tr>
+      <td>
+        {% highlight scala %}
+STRING.sha1()
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the SHA-1 hash of the string argument as a string of 40 hexadecimal digits; null if <i>string</i> is null.</p>
+      </td>
+    </tr>
+
+        <tr>
+      <td>
+        {% highlight scala %}
+STRING.sha256()
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the SHA-256 hash of the string argument as a string of 64 hexadecimal digits; null if <i>string</i> is null.</p>
+      </td>
+    </tr>
+
+    </tbody>
+</table>
+
 <table class="table table-bordered">
   <thead>
     <tr>
@@ -4413,7 +4599,6 @@ The following operations are not supported yet:
 
 - Binary string operators and functions
 - System functions
-- Collection functions
 - Aggregate functions like REGR_xxx
 - Distinct aggregate functions like COUNT DISTINCT
 

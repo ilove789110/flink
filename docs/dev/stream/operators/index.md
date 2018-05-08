@@ -100,9 +100,9 @@ dataStream.filter(new FilterFunction<Integer>() {
         <tr>
           <td><strong>KeyBy</strong><br>DataStream &rarr; KeyedStream</td>
           <td>
-            <p>Logically partitions a stream into disjoint partitions, each partition containing elements of the same key.
-            Internally, this is implemented with hash partitioning. See <a href="{{ site.baseurl }}/dev/api_concepts.html#specifying-keys">keys</a> on how to specify keys.
-            This transformation returns a KeyedStream.</p>
+            <p>Logically partitions a stream into disjoint partitions. All records with the same key are assigned to the same partition. Internally, <em>keyBy()</em> is implemented with hash partitioning. There are different ways to <a href="{{ site.baseurl }}/dev/api_concepts.html#specifying-keys">specify keys</a>.</p>
+            <p>
+            This transformation returns a <em>KeyedStream</em>, which is, among other things, required to use <a href="{{ site.baseurl }}/dev/stream/state/state.html#keyed-state">keyed state</a>. </p>
     {% highlight java %}
 dataStream.keyBy("someKey") // Key by field "someKey"
 dataStream.keyBy(0) // Key by the first element of a Tuple
@@ -123,9 +123,9 @@ dataStream.keyBy(0) // Key by the first element of a Tuple
           <td>
             <p>A "rolling" reduce on a keyed data stream. Combines the current element with the last reduced value and
             emits the new value.
-                    <br/>
+              <br/>
             	<br/>
-            A reduce function that creates a stream of partial sums:</p>
+            <p>A reduce function that creates a stream of partial sums:</p>
             {% highlight java %}
 keyedStream.reduce(new ReduceFunction<Integer>() {
     @Override
@@ -271,7 +271,7 @@ windowedStream.fold("start", new FoldFunction<Integer, String>() {
           <td><strong>Aggregations on windows</strong><br>WindowedStream &rarr; DataStream</td>
           <td>
             <p>Aggregates the contents of a window. The difference between min
-	    and minBy is that min returns the minimun value, whereas minBy returns
+	    and minBy is that min returns the minimum value, whereas minBy returns
 	    the element that has the minimum value in this field (same for max and maxBy).</p>
     {% highlight java %}
 windowedStream.sum(0);
@@ -540,7 +540,7 @@ val result: DataStream[String] =
           <td><strong>Aggregations</strong><br>KeyedStream &rarr; DataStream</td>
           <td>
             <p>Rolling aggregations on a keyed data stream. The difference between min
-	    and minBy is that min returns the minimun value, whereas minBy returns
+	    and minBy is that min returns the minimum value, whereas minBy returns
 	    the element that has the minimum value in this field (same for max and maxBy).</p>
     {% highlight scala %}
 keyedStream.sum(0)

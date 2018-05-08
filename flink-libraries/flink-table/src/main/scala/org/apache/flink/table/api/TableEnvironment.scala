@@ -290,6 +290,17 @@ abstract class TableEnvironment(val config: TableConfig) {
   }
 
   /**
+    * Creates a table from a table source.
+    *
+    * @param source table source used as table
+    */
+  def fromTableSource(source: TableSource[_]): Table = {
+    val name = createUniqueTableName()
+    registerTableSourceInternal(name, source)
+    scan(name)
+  }
+
+  /**
     * Registers an [[ExternalCatalog]] under a unique name in the TableEnvironment's schema.
     * All tables registered in the [[ExternalCatalog]] can be accessed.
     *
@@ -302,7 +313,7 @@ abstract class TableEnvironment(val config: TableConfig) {
     }
     this.externalCatalogs.put(name, externalCatalog)
     // create an external catalog Calcite schema, register it on the root schema
-    ExternalCatalogSchema.registerCatalog(rootSchema, name, externalCatalog)
+    ExternalCatalogSchema.registerCatalog(this, rootSchema, name, externalCatalog)
   }
 
   /**
@@ -422,7 +433,19 @@ abstract class TableEnvironment(val config: TableConfig) {
     * @param name        The name under which the [[TableSource]] is registered.
     * @param tableSource The [[TableSource]] to register.
     */
-  def registerTableSource(name: String, tableSource: TableSource[_]): Unit
+  def registerTableSource(name: String, tableSource: TableSource[_]): Unit = {
+    checkValidTableName(name)
+    registerTableSourceInternal(name, tableSource)
+  }
+
+  /**
+    * Registers an internal [[TableSource]] in this [[TableEnvironment]]'s catalog without
+    * name checking. Registered tables can be referenced in SQL queries.
+    *
+    * @param name        The name under which the [[TableSource]] is registered.
+    * @param tableSource The [[TableSource]] to register.
+    */
+  protected def registerTableSourceInternal(name: String, tableSource: TableSource[_]): Unit
 
   /**
     * Registers an external [[TableSink]] with given field names and types in this
@@ -514,6 +537,30 @@ abstract class TableEnvironment(val config: TableConfig) {
   }
 
   /**
+    * Gets the names of all tables registered in this environment.
+    *
+    * @return A list of the names of all registered tables.
+    */
+  def listTables(): Array[String] = {
+    rootSchema.getTableNames.asScala.toArray
+  }
+
+  /**
+    * Gets the names of all functions registered in this environment.
+    */
+  def listUserDefinedFunctions(): Array[String] = {
+    functionCatalog.getUserDefinedFunctions.toArray
+  }
+
+  /**
+    * Returns the AST of the specified Table API and SQL queries and the execution plan to compute
+    * the result of the given [[Table]].
+    *
+    * @param table The table for which the AST and execution plan will be returned.
+    */
+  def explain(table: Table): String
+
+  /**
     * Evaluates a SQL query on registered tables and retrieves the result as a [[Table]].
     *
     * All tables referenced by the query must be registered in the TableEnvironment.
@@ -527,9 +574,11 @@ abstract class TableEnvironment(val config: TableConfig) {
     *   tEnv.sql(s"SELECT * FROM $table")
     * }}}
     *
+    * @deprecated Use sqlQuery() instead.
     * @param query The SQL query to evaluate.
     * @return The result of the query as Table.
     */
+  @Deprecated
   @deprecated("Please use sqlQuery() instead.")
   def sql(query: String): Table = {
     sqlQuery(query)
@@ -714,6 +763,9 @@ abstract class TableEnvironment(val config: TableConfig) {
     }
   }
 
+  /** Returns a unique table name according to the internal naming pattern. */
+  protected def createUniqueTableName(): String
+
   /**
     * Checks if the chosen table name is valid.
     *
@@ -777,8 +829,7 @@ abstract class TableEnvironment(val config: TableConfig) {
     * can be used for any input type, including POJOs.
     *
     * Reference input fields by position:
-    * Field references must refer to existing fields in the input type (except for
-    * renaming with alias (as)). In this mode, fields are simply renamed. Event-time attributes can
+    * In this mode, fields are simply renamed. Event-time attributes can
     * replace the field on their position in the input data (if it is of correct type) or be
     * appended at the end. Proctime attributes must be appended at the end. This mode can only be
     * used if the input type has a defined field order (tuple, case class, Row) and no of fields

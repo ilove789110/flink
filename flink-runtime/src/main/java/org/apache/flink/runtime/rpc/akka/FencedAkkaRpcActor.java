@@ -19,10 +19,11 @@
 package org.apache.flink.runtime.rpc.akka;
 
 import org.apache.flink.runtime.rpc.FencedRpcEndpoint;
+import org.apache.flink.runtime.rpc.RpcGateway;
 import org.apache.flink.runtime.rpc.akka.exceptions.AkkaUnknownMessageException;
 import org.apache.flink.runtime.rpc.exceptions.FencingTokenException;
-import org.apache.flink.runtime.rpc.RpcGateway;
 import org.apache.flink.runtime.rpc.messages.FencedMessage;
+import org.apache.flink.runtime.rpc.messages.LocalFencedMessage;
 import org.apache.flink.runtime.rpc.messages.UnfencedMessage;
 
 import java.io.Serializable;
@@ -38,8 +39,8 @@ import java.util.concurrent.CompletableFuture;
  */
 public class FencedAkkaRpcActor<F extends Serializable, T extends FencedRpcEndpoint<F> & RpcGateway> extends AkkaRpcActor<T> {
 
-	public FencedAkkaRpcActor(T rpcEndpoint, CompletableFuture<Void> internalTerminationFuture) {
-		super(rpcEndpoint, internalTerminationFuture);
+	public FencedAkkaRpcActor(T rpcEndpoint, CompletableFuture<Boolean> terminationFuture) {
+		super(rpcEndpoint, terminationFuture);
 	}
 
 	@Override
@@ -55,7 +56,10 @@ public class FencedAkkaRpcActor<F extends Serializable, T extends FencedRpcEndpo
 
 				sendErrorIfSender(
 					new FencingTokenException(
-						"Fencing token not set: Ignoring message " + message + " because the fencing token is null."));
+						String.format(
+							"Fencing token not set: Ignoring message %s sent to %s because the fencing token is null.",
+							message,
+							rpcEndpoint.getAddress())));
 			} else {
 				@SuppressWarnings("unchecked")
 				FencedMessage<F, ?> fencedMessage = ((FencedMessage<F, ?>) message);
@@ -88,5 +92,12 @@ public class FencedAkkaRpcActor<F extends Serializable, T extends FencedRpcEndpo
 				" of type " + message.getClass().getSimpleName() + " because it is neither of type " +
 				FencedMessage.class.getSimpleName() + " nor " + UnfencedMessage.class.getSimpleName() + '.'));
 		}
+	}
+
+	@Override
+	protected Object envelopeSelfMessage(Object message) {
+		final F fencingToken = rpcEndpoint.getFencingToken();
+
+		return new LocalFencedMessage<>(fencingToken, message);
 	}
 }

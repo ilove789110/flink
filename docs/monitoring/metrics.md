@@ -182,7 +182,7 @@ new class MyMapper extends RichMapFunction[String,String] {
   override def open(parameters: Configuration): Unit = {
     getRuntimeContext()
       .getMetricGroup()
-      .gauge("MyGauge", ScalaGauge[Int]( () => valueToExpose ) )
+      .gauge[Int, ScalaGauge[Int]]("MyGauge", ScalaGauge[Int]( () => valueToExpose ) )
   }
 
   override def map(value: String): String = {
@@ -569,7 +569,7 @@ we will list more settings specific to each reporter.
 
 Example reporter configuration that specifies multiple reporters:
 
-```
+{% highlight yaml %}
 metrics.reporters: my_jmx_reporter,my_other_reporter
 
 metrics.reporter.my_jmx_reporter.class: org.apache.flink.metrics.jmx.JMXReporter
@@ -579,7 +579,7 @@ metrics.reporter.my_other_reporter.class: org.apache.flink.metrics.graphite.Grap
 metrics.reporter.my_other_reporter.host: 192.168.1.1
 metrics.reporter.my_other_reporter.port: 10000
 
-```
+{% endhighlight %}
 
 **Important:** The jar containing the reporter must be accessible when Flink is started by placing it in the /lib folder.
 
@@ -1190,12 +1190,13 @@ Thus, in order to infer the metric identifier:
   </thead>
   <tbody>
     <tr>
-      <th rowspan="7"><strong>Task</strong></th>
-      <td>currentLowWatermark</td>
-      <td>The lowest watermark this task has received (in milliseconds).</td>
-      <td>Gauge</td>
+      <th rowspan="1"><strong>Job (only available on TaskManager)</strong></th>
+      <td>&lt;source_id&gt;.&lt;source_subtask_index&gt;.&lt;operator_id&gt;.&lt;operator_subtask_index&gt;.latency</td>
+      <td>The latency distributions from a given source subtask to an operator subtask (in milliseconds).</td>
+      <td>Histogram</td>
     </tr>
     <tr>
+      <th rowspan="6"><strong>Task</strong></th>
       <td>numBytesInLocal</td>
       <td>The total number of bytes this task has read from a local source.</td>
       <td>Counter</td>
@@ -1252,10 +1253,36 @@ Thus, in order to infer the metric identifier:
       <td>Counter</td>
     </tr>
     <tr>
-      <th rowspan="2"><strong>Operator</strong></th>
-      <td>latency</td>
-      <td>The latency distributions from all incoming sources (in milliseconds).</td>
-      <td>Histogram</td>
+      <th rowspan="5"><strong>Operator</strong></th>
+      <td>currentInputWatermark</td>
+      <td>
+        The last watermark this operator has received (in milliseconds).
+        <p><strong>Note:</strong> For operators with 2 inputs this is the minimum of the last received watermarks.</p>
+      </td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>currentInput1Watermark</td>
+      <td>
+        The last watermark this operator has received in its first input (in milliseconds).
+        <p><strong>Note:</strong> Only for operators with 2 inputs.</p>
+      </td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>currentInput2Watermark</td>
+      <td>
+        The last watermark this operator has received in its second input (in milliseconds).
+        <p><strong>Note:</strong> Only for operators with 2 inputs.</p>
+      </td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>currentOutputWatermark</td>
+      <td>
+        The last watermark this operator has emitted (in milliseconds).
+      </td>
+      <td>Gauge</td>
     </tr>
     <tr>
       <td>numSplitsProcessed</td>
@@ -1271,24 +1298,73 @@ Thus, in order to infer the metric identifier:
 <table class="table table-bordered">
   <thead>
     <tr>
-      <th class="text-left" style="width: 18%">Scope</th>
-      <th class="text-left" style="width: 26%">Metrics</th>
-      <th class="text-left" style="width: 48%">Description</th>
-      <th class="text-left" style="width: 8%">Type</th>
+      <th class="text-left" style="width: 15%">Scope</th>
+      <th class="text-left" style="width: 18%">Metrics</th>
+      <th class="text-left" style="width: 18%">User Variables</th>
+      <th class="text-left" style="width: 39%">Description</th>
+      <th class="text-left" style="width: 10%">Type</th>
     </tr>
   </thead>
   <tbody>
     <tr>
       <th rowspan="1">Operator</th>
       <td>commitsSucceeded</td>
-      <td>Kafka offset commit success count if Kafka commit is turned on and checkpointing is enabled.</td>
+      <td>n/a</td>
+      <td>The total number of successful offset commits to Kafka, if offset committing is turned on and checkpointing is enabled.</td>
       <td>Counter</td>
     </tr>
     <tr>
        <th rowspan="1">Operator</th>
        <td>commitsFailed</td>
-       <td>Kafka offset commit failure count if Kafka commit is turned on and checkpointing is enabled.</td>
+       <td>n/a</td>
+       <td>The total number of offset commit failures to Kafka, if offset committing is
+       turned on and checkpointing is enabled. Note that committing offsets back to Kafka
+       is only a means to expose consumer progress, so a commit failure does not affect
+       the integrity of Flink's checkpointed partition offsets.</td>
        <td>Counter</td>
+    </tr>
+    <tr>
+       <th rowspan="1">Operator</th>
+       <td>committedOffsets</td>
+       <td>topic, partition</td>
+       <td>The last successfully committed offsets to Kafka, for each partition.
+       A particular partition's metric can be specified by topic name and partition id.</td>
+       <td>Gauge</td>
+    </tr>
+    <tr>
+      <th rowspan="1">Operator</th>
+      <td>currentOffsets</td>
+      <td>topic, partition</td>
+      <td>The consumer's current read offset, for each partition. A particular
+      partition's metric can be specified by topic name and partition id.</td>
+      <td>Gauge</td>
+    </tr>
+  </tbody>
+</table>
+
+#### Kinesis Connectors
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style="width: 15%">Scope</th>
+      <th class="text-left" style="width: 18%">Metrics</th>
+      <th class="text-left" style="width: 18%">User Variables</th>
+      <th class="text-left" style="width: 39%">Description</th>
+      <th class="text-left" style="width: 10%">Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="1">Operator</th>
+      <td>millisBehindLatest</td>
+      <td>stream, shardId</td>
+      <td>The number of milliseconds the consumer is behind the head of the stream,
+      indicating how far behind current time the consumer is, for each Kinesis shard.
+      A particular shard's metric can be specified by stream name and shard id.
+      A value of 0 indicates record processing is caught up, and there are no new records
+      to process at this moment. A value of -1 indicates that there is no reported value for the metric, yet.
+      </td>
+      <td>Gauge</td>
     </tr>
   </tbody>
 </table>
@@ -1347,7 +1423,7 @@ Request a list of available metrics:
 
 `GET /jobmanager/metrics`
 
-~~~
+{% highlight json %}
 [
   {
     "id": "metric1"
@@ -1356,13 +1432,13 @@ Request a list of available metrics:
     "id": "metric2"
   }
 ]
-~~~
+{% endhighlight %}
 
 Request the values for specific (unaggregated) metrics:
 
 `GET taskmanagers/ABCDE/metrics?get=metric1,metric2`
 
-~~~
+{% highlight json %}
 [
   {
     "id": "metric1",
@@ -1373,13 +1449,13 @@ Request the values for specific (unaggregated) metrics:
     "value": "2"
   }
 ]
-~~~
+{% endhighlight %}
 
 Request aggregated values for specific metrics:
 
 `GET /taskmanagers/metrics?get=metric1,metric2`
 
-~~~
+{% highlight json %}
 [
   {
     "id": "metric1",
@@ -1396,13 +1472,13 @@ Request aggregated values for specific metrics:
     "sum": 16
   }
 ]
-~~~
+{% endhighlight %}
 
 Request specific aggregated values for specific metrics:
 
 `GET /taskmanagers/metrics?get=metric1,metric2&agg=min,max`
 
-~~~
+{% highlight json %}
 [
   {
     "id": "metric1",
@@ -1415,7 +1491,7 @@ Request specific aggregated values for specific metrics:
     "max": 14,
   }
 ]
-~~~
+{% endhighlight %}
 
 ## Dashboard integration
 

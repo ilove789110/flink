@@ -17,6 +17,7 @@
 
 package org.apache.flink.streaming.connectors.kinesis.util;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.runtime.util.EnvironmentInformation;
 import org.apache.flink.streaming.connectors.kinesis.config.AWSConfigConstants;
 import org.apache.flink.streaming.connectors.kinesis.config.AWSConfigConstants.CredentialProvider;
@@ -30,37 +31,64 @@ import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
 import com.amazonaws.auth.EnvironmentVariableCredentialsProvider;
 import com.amazonaws.auth.SystemPropertiesCredentialsProvider;
 import com.amazonaws.auth.profile.ProfileCredentialsProvider;
-import com.amazonaws.regions.Region;
+import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.regions.Regions;
-import com.amazonaws.services.kinesis.AmazonKinesisClient;
+import com.amazonaws.services.kinesis.AmazonKinesis;
+import com.amazonaws.services.kinesis.AmazonKinesisClientBuilder;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.deser.BeanDeserializerFactory;
+import com.fasterxml.jackson.databind.deser.BeanDeserializerModifier;
+import com.fasterxml.jackson.databind.deser.DefaultDeserializationContext;
+import com.fasterxml.jackson.databind.deser.DeserializerFactory;
 
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Properties;
 
 /**
  * Some utilities specific to Amazon Web Service.
  */
+@Internal
 public class AWSUtil {
+	/** Used for formatting Flink-specific user agent string when creating Kinesis client. */
+	private static final String USER_AGENT_FORMAT = "Apache Flink %s (%s) Kinesis Connector";
+
+	/**
+	 * Creates an AmazonKinesis client.
+	 * @param configProps configuration properties containing the access key, secret key, and region
+	 * @return a new AmazonKinesis client
+	 */
+	public static AmazonKinesis createKinesisClient(Properties configProps) {
+		return createKinesisClient(configProps, new ClientConfigurationFactory().getConfig());
+	}
 
 	/**
 	 * Creates an Amazon Kinesis Client.
 	 * @param configProps configuration properties containing the access key, secret key, and region
+	 * @param awsClientConfig preconfigured AWS SDK client configuration
 	 * @return a new Amazon Kinesis Client
 	 */
-	public static AmazonKinesisClient createKinesisClient(Properties configProps) {
+	public static AmazonKinesis createKinesisClient(Properties configProps, ClientConfiguration awsClientConfig) {
 		// set a Flink-specific user agent
-		ClientConfiguration awsClientConfig = new ClientConfigurationFactory().getConfig();
-		awsClientConfig.setUserAgent("Apache Flink " + EnvironmentInformation.getVersion() +
-			" (" + EnvironmentInformation.getRevisionInformation().commitId + ") Kinesis Connector");
+		awsClientConfig.setUserAgentPrefix(String.format(USER_AGENT_FORMAT,
+				EnvironmentInformation.getVersion(),
+				EnvironmentInformation.getRevisionInformation().commitId));
 
 		// utilize automatic refreshment of credentials by directly passing the AWSCredentialsProvider
-		AmazonKinesisClient client = new AmazonKinesisClient(
-			AWSUtil.getCredentialsProvider(configProps), awsClientConfig);
+		AmazonKinesisClientBuilder builder = AmazonKinesisClientBuilder.standard()
+				.withCredentials(AWSUtil.getCredentialsProvider(configProps))
+				.withClientConfiguration(awsClientConfig)
+				.withRegion(Regions.fromName(configProps.getProperty(AWSConfigConstants.AWS_REGION)));
 
-		client.setRegion(Region.getRegion(Regions.fromName(configProps.getProperty(AWSConfigConstants.AWS_REGION))));
 		if (configProps.containsKey(AWSConfigConstants.AWS_ENDPOINT)) {
-			client.setEndpoint(configProps.getProperty(AWSConfigConstants.AWS_ENDPOINT));
+			// Set signingRegion as null, to facilitate mocking Kinesis for local tests
+			builder.withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(
+													configProps.getProperty(AWSConfigConstants.AWS_ENDPOINT),
+													null));
 		}
-		return client;
+		return builder.build();
 	}
 
 	/**
@@ -140,4 +168,42 @@ public class AWSUtil {
 		}
 		return true;
 	}
+
+	/**
+	 * The prefix used for properties that should be applied to {@link ClientConfiguration}.
+	 */
+	public static final String AWS_CLIENT_CONFIG_PREFIX = "aws.clientconfig.";
+
+	/**
+	 * Set all prefixed properties on {@link ClientConfiguration}.
+	 * @param config
+	 * @param configProps
+	 */
+	public static void setAwsClientConfigProperties(ClientConfiguration config,
+													Properties configProps) {
+
+		Map<String, Object> awsConfigProperties = new HashMap<>();
+		for (Map.Entry<Object, Object> entry : configProps.entrySet()) {
+			String key = (String) entry.getKey();
+			if (key.startsWith(AWS_CLIENT_CONFIG_PREFIX)) {
+				awsConfigProperties.put(key.substring(AWS_CLIENT_CONFIG_PREFIX.length()), entry.getValue());
+			}
+		}
+		// Jackson does not like the following properties
+		String[] ignorableProperties = {"secureRandom"};
+		BeanDeserializerModifier modifier = new BeanDeserializerModifierForIgnorables(
+			ClientConfiguration.class, ignorableProperties);
+		DeserializerFactory factory = BeanDeserializerFactory.instance.withDeserializerModifier(
+			modifier);
+		ObjectMapper mapper = new ObjectMapper(null, null,
+			new DefaultDeserializationContext.Impl(factory));
+
+		JsonNode propTree = mapper.convertValue(awsConfigProperties, JsonNode.class);
+		try {
+			mapper.readerForUpdating(config).readValue(propTree);
+		} catch (IOException ex) {
+			throw new RuntimeException(ex);
+		}
+	}
+
 }

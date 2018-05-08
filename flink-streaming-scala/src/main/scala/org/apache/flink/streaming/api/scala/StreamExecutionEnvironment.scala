@@ -23,10 +23,12 @@ import org.apache.flink.annotation.{Internal, Public, PublicEvolving}
 import org.apache.flink.api.common.io.{FileInputFormat, FilePathFilter, InputFormat}
 import org.apache.flink.api.common.restartstrategy.RestartStrategies.RestartStrategyConfiguration
 import org.apache.flink.api.common.typeinfo.TypeInformation
+import org.apache.flink.api.java.typeutils.ResultTypeQueryable
 import org.apache.flink.api.java.typeutils.runtime.kryo.KryoSerializer
 import org.apache.flink.api.scala.ClosureCleaner
 import org.apache.flink.configuration.Configuration
 import org.apache.flink.runtime.state.AbstractStateBackend
+import org.apache.flink.runtime.state.StateBackend
 import org.apache.flink.streaming.api.environment.{StreamExecutionEnvironment => JavaEnv}
 import org.apache.flink.streaming.api.functions.source._
 import org.apache.flink.streaming.api.functions.source.SourceFunction.SourceContext
@@ -224,35 +226,45 @@ class StreamExecutionEnvironment(javaEnv: JavaEnv) {
   def getCheckpointingMode = javaEnv.getCheckpointingMode()
 
   /**
-   * Sets the state backend that describes how to store and checkpoint operator state.
-   * It defines in what form the key/value state, accessible from operations on
-   * [[KeyedStream]] is maintained (heap, managed memory, externally), and where state
-   * snapshots/checkpoints are stored, both for the key/value state, and for checkpointed
-   * functions (implementing the interface 
-   * [[org.apache.flink.streaming.api.checkpoint.CheckpointedFunction]].
+   * Sets the state backend that describes how to store and checkpoint operator state. It defines
+   * both which data structures hold state during execution (for example hash tables, RockDB,
+   * or other data stores) as well as where checkpointed data will be persisted.
    *
-   * <p>The [[org.apache.flink.runtime.state.memory.MemoryStateBackend]] for example
-   * maintains the state in heap memory, as objects. It is lightweight without extra 
-   * dependencies, but can checkpoint only small states (some counters).
+   * State managed by the state backend includes both keyed state that is accessible on
+   * [[org.apache.flink.streaming.api.datastream.KeyedStream keyed streams]], as well as
+   * state maintained directly by the user code that implements
+   * [[org.apache.flink.streaming.api.checkpoint.CheckpointedFunction CheckpointedFunction]].
    *
-   * <p>In contrast, the [[org.apache.flink.runtime.state.filesystem.FsStateBackend]]
-   * stores checkpoints of the state (also maintained as heap objects) in files. When using
-   * a replicated file system (like HDFS, S3, MapR FS, Tachyon, etc) this will guarantee
-   * that state is not lost upon failures of individual nodes and that the entire streaming
-   * program can be executed highly available and strongly consistent (assuming that Flink
-   * is run in high-availability mode).
+   * The [[org.apache.flink.runtime.state.memory.MemoryStateBackend]], for example,
+   * maintains the state in heap memory, as objects. It is lightweight without extra dependencies,
+   * but can checkpoint only small states (some counters).
+   *
+   * In contrast, the [[org.apache.flink.runtime.state.filesystem.FsStateBackend]]
+   * stores checkpoints of the state (also maintained as heap objects) in files.
+   * When using a replicated file system (like HDFS, S3, MapR FS, Tachyon, etc) this will guarantee
+   * that state is not lost upon failures of individual nodes and that streaming program can be
+   * executed highly available and strongly consistent.
    */
   @PublicEvolving
-  def setStateBackend(backend: AbstractStateBackend): StreamExecutionEnvironment = {
+  def setStateBackend(backend: StateBackend): StreamExecutionEnvironment = {
     javaEnv.setStateBackend(backend)
     this
+  }
+
+  /**
+   * @deprecated Use [[StreamExecutionEnvironment.setStateBackend(StateBackend)]] instead.
+   */
+  @Deprecated
+  @PublicEvolving
+  def setStateBackend(backend: AbstractStateBackend): StreamExecutionEnvironment = {
+    setStateBackend(backend.asInstanceOf[StateBackend])
   }
 
   /**
    * Returns the state backend that defines how to store and checkpoint state.
    */
   @PublicEvolving
-  def getStateBackend: AbstractStateBackend = javaEnv.getStateBackend()
+  def getStateBackend: StateBackend = javaEnv.getStateBackend()
 
   /**
     * Sets the restart strategy configuration. The configuration specifies which restart strategy
@@ -583,7 +595,11 @@ class StreamExecutionEnvironment(javaEnv: JavaEnv) {
    */
   @PublicEvolving
   def createInput[T: TypeInformation](inputFormat: InputFormat[T, _]): DataStream[T] =
-    asScalaStream(javaEnv.createInput(inputFormat))
+    if (inputFormat.isInstanceOf[ResultTypeQueryable[_]]) {
+      asScalaStream(javaEnv.createInput(inputFormat))
+    } else {
+      asScalaStream(javaEnv.createInput(inputFormat, implicitly[TypeInformation[T]]))
+    }
 
   /**
    * Create a DataStream using a user defined source function for arbitrary

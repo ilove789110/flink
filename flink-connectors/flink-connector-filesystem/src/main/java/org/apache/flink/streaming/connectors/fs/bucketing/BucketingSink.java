@@ -44,6 +44,7 @@ import org.apache.flink.util.Preconditions;
 import org.apache.commons.lang3.time.StopWatch;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.slf4j.Logger;
@@ -226,7 +227,12 @@ public class BucketingSink<T>
 	/**
 	 * The default prefix for part files.
 	 */
-	private static final String DEFAULT_PART_REFIX = "part";
+	private static final String DEFAULT_PART_PREFIX = "part";
+
+	/**
+	 * The default suffix for part files.
+	 */
+	private static final String DEFAULT_PART_SUFFIX = null;
 
 	/**
 	 * The default timeout for asynchronous operations such as recoverLease and truncate (in {@code ms}).
@@ -263,7 +269,10 @@ public class BucketingSink<T>
 	private String validLengthSuffix = DEFAULT_VALID_SUFFIX;
 	private String validLengthPrefix = DEFAULT_VALID_PREFIX;
 
-	private String partPrefix = DEFAULT_PART_REFIX;
+	private String partPrefix = DEFAULT_PART_PREFIX;
+	private String partSuffix = DEFAULT_PART_SUFFIX;
+
+	private boolean useTruncate = true;
 
 	/**
 	 * The timeout for asynchronous operations such as recoverLease and truncate (in {@code ms}).
@@ -528,6 +537,10 @@ public class BucketingSink<T>
 			partPath = new Path(bucketPath, partPrefix + "-" + subtaskIndex + "-" + bucketState.partCounter);
 		}
 
+		if (partSuffix != null) {
+			partPath = partPath.suffix(partSuffix);
+		}
+
 		// increase, so we don't have to check for this name next time
 		bucketState.partCounter++;
 
@@ -537,6 +550,12 @@ public class BucketingSink<T>
 		Path inProgressPath = getInProgressPathFor(partPath);
 		if (bucketState.writer == null) {
 			bucketState.writer = writerTemplate.duplicate();
+			if (bucketState.writer == null) {
+				throw new UnsupportedOperationException(
+					"Could not duplicate writer. " +
+						"Class '" + writerTemplate.getClass().getCanonicalName() + "' must implement the 'Writer.duplicate()' method."
+				);
+			}
 		}
 
 		bucketState.writer.open(fs, inProgressPath);
@@ -572,6 +591,12 @@ public class BucketingSink<T>
 	 * <p><b>NOTE:</b> This code comes from Flume.
 	 */
 	private Method reflectTruncate(FileSystem fs) {
+		// completely disable the check for truncate() because the check can be problematic
+		// on some filesystem implementations
+		if (!useTruncate) {
+			return null;
+		}
+
 		Method m = null;
 		if (fs != null) {
 			Class<?> fsClass = fs.getClass();
@@ -592,7 +617,9 @@ public class BucketingSink<T>
 				outputStream.close();
 			} catch (IOException e) {
 				LOG.error("Could not create file for checking if truncate works.", e);
-				throw new RuntimeException("Could not create file for checking if truncate works.", e);
+				throw new RuntimeException("Could not create file for checking if truncate works. " +
+					"You can disable support for truncate() completely via " +
+					"BucketingSink.setUseTruncate(false).", e);
 			}
 
 			try {
@@ -606,7 +633,9 @@ public class BucketingSink<T>
 				fs.delete(testPath, false);
 			} catch (IOException e) {
 				LOG.error("Could not delete truncate test file.", e);
-				throw new RuntimeException("Could not delete truncate test file.", e);
+				throw new RuntimeException("Could not delete truncate test file. " +
+					"You can disable support for truncate() completely via " +
+					"BucketingSink.setUseTruncate(false).", e);
 			}
 		}
 		return m;
@@ -821,9 +850,9 @@ public class BucketingSink<T>
 						}
 					}
 				} else {
-					LOG.debug("Writing valid-length file for {} to specify valid length {}", partPath, validLength);
 					Path validLengthFilePath = getValidLengthPathFor(partPath);
 					if (!fs.exists(validLengthFilePath) && fs.exists(partPath)) {
+						LOG.debug("Writing valid-length file for {} to specify valid length {}", partPath, validLength);
 						FSDataOutputStream lengthFileOut = fs.create(validLengthFilePath);
 						lengthFileOut.writeUTF(Long.toString(validLength));
 						lengthFileOut.close();
@@ -975,10 +1004,29 @@ public class BucketingSink<T>
 	}
 
 	/**
+	 * Sets the prefix of part files.  The default is no suffix.
+	 */
+	public BucketingSink<T> setPartSuffix(String partSuffix) {
+		this.partSuffix = partSuffix;
+		return this;
+	}
+
+	/**
 	 * Sets the prefix of part files.  The default is {@code "part"}.
 	 */
 	public BucketingSink<T> setPartPrefix(String partPrefix) {
 		this.partPrefix = partPrefix;
+		return this;
+	}
+
+	/**
+	 * Sets whether to use {@code FileSystem.truncate()} to truncate written bucket files back to
+	 * a consistent state in case of a restore from checkpoint. If {@code truncate()} is not used
+	 * this sink will write valid-length files for corresponding bucket files that have to be used
+	 * when reading from bucket files to make sure to not read too far.
+	 */
+	public BucketingSink<T> setUseTruncate(boolean useTruncate) {
+		this.useTruncate = useTruncate;
 		return this;
 	}
 
@@ -1122,7 +1170,8 @@ public class BucketingSink<T>
 		// try to get the Hadoop File System via the Flink File Systems
 		// that way we get the proper configuration
 
-		final org.apache.flink.core.fs.FileSystem flinkFs = org.apache.flink.core.fs.FileSystem.get(path.toUri());
+		final org.apache.flink.core.fs.FileSystem flinkFs =
+				org.apache.flink.core.fs.FileSystem.getUnguardedFileSystem(path.toUri());
 		final FileSystem hadoopFs = (flinkFs instanceof HadoopFileSystem) ?
 				((HadoopFileSystem) flinkFs).getHadoopFileSystem() : null;
 
@@ -1203,6 +1252,12 @@ public class BucketingSink<T>
 			}
 
 			fs.initialize(fsUri, finalConf);
+
+			// We don't perform checksums on Hadoop's local filesystem and use the raw filesystem.
+			// Otherwise buffers are not flushed entirely during checkpointing which results in data loss.
+			if (fs instanceof LocalFileSystem) {
+				return ((LocalFileSystem) fs).getRaw();
+			}
 			return fs;
 		}
 	}

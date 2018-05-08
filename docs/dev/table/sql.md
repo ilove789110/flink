@@ -22,7 +22,7 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-SQL queries are specified with the `sql()` method of the `TableEnvironment`. The method returns the result of the SQL query as a `Table`. A `Table` can be used in [subsequent SQL and Table API queries](common.html#mixing-table-api-and-sql), be [converted into a DataSet or DataStream](common.html#integration-with-datastream-and-dataset-api), or [written to a TableSink](common.html#emit-a-table)). SQL and Table API queries can seamlessly mixed and are holistically optimized and translated into a single program.
+SQL queries are specified with the `sqlQuery()` method of the `TableEnvironment`. The method returns the result of the SQL query as a `Table`. A `Table` can be used in [subsequent SQL and Table API queries](common.html#mixing-table-api-and-sql), be [converted into a DataSet or DataStream](common.html#integration-with-datastream-and-dataset-api), or [written to a TableSink](common.html#emit-a-table)). SQL and Table API queries can seamlessly mixed and are holistically optimized and translated into a single program.
 
 In order to access a table in a SQL query, it must be [registered in the TableEnvironment](common.html#register-a-table-in-the-catalog). A table can be registered from a [TableSource](common.html#register-a-tablesource), [Table](common.html#register-a-table), [DataStream, or DataSet](common.html#register-a-datastream-or-dataset-as-table). Alternatively, users can also [register external catalogs in a TableEnvironment](common.html#register-an-external-catalog) to specify the location of the data sources.
 
@@ -94,7 +94,7 @@ val result2 = tableEnv.sqlQuery(
 // SQL update with a registered table
 // create and register a TableSink
 TableSink csvSink = new CsvTableSink("/path/to/file", ...)
-val fieldNames: Arary[String] = Array("product", "amount")
+val fieldNames: Array[String] = Array("product", "amount")
 val fieldTypes: Array[TypeInformation[_]] = Array(Types.STRING, Types.INT)
 tableEnv.registerTableSink("RubberOrders", fieldNames, fieldTypes, csvSink)
 // run a SQL update query on the Table and emit the result to the TableSink
@@ -113,7 +113,7 @@ Flink parses SQL using [Apache Calcite](https://calcite.apache.org/docs/referenc
 
 The following BNF-grammar describes the superset of supported SQL features in batch and streaming queries. The [Operations](#operations) section shows examples for the supported features and indicates which features are only supported for batch or streaming queries.
 
-```
+{% highlight sql %}
 
 query:
   values
@@ -180,7 +180,7 @@ insert:
   INSERT INTO tableReference
   query
 
-```
+{% endhighlight %}
 
 Flink SQL uses a lexical policy for identifier (table, attribute, function names) similar to Java:
 
@@ -376,9 +376,10 @@ GROUP BY users
     </tr>
   </thead>
   <tbody>
-  	<tr>
-      <td><strong>Inner Equi-join / Outer Equi-join</strong><br>
+    <tr>
+      <td><strong>Inner Equi-join</strong><br>
         <span class="label label-primary">Batch</span>
+        <span class="label label-primary">Streaming</span>
       </td>
       <td>
         <p>Currently, only equi-joins are supported, i.e., joins that have at least one conjunctive condition with an equality predicate. Arbitrary cross or theta joins are not supported.</p>
@@ -386,9 +387,26 @@ GROUP BY users
 {% highlight sql %}
 SELECT *
 FROM Orders INNER JOIN Product ON Orders.productId = Product.id
-
+{% endhighlight %}
+<p><b>Note:</b> For streaming queries the required state to compute the query result might grow infinitely depending on the number of distinct input rows. Please provide a query configuration with valid retention interval to prevent excessive state size. See <a href="streaming.html">Streaming Concepts</a> for details.</p>
+      </td>
+    </tr>
+    <tr>
+      <td><strong>Outer Equi-join</strong><br>
+        <span class="label label-primary">Batch</span>
+      </td>
+      <td>
+        <p>Currently, only equi-joins are supported, i.e., joins that have at least one conjunctive condition with an equality predicate. Arbitrary cross or theta joins are not supported.</p>
+        <p><b>Note:</b> The order of joins is not optimized. Tables are joined in the order in which they are specified in the FROM clause. Make sure to specify tables in an order that does not yield a cross join (Cartesian product) which are not supported and would cause a query to fail.</p>
+{% highlight sql %}
 SELECT *
 FROM Orders LEFT JOIN Product ON Orders.productId = Product.id
+
+SELECT *
+FROM Orders RIGHT JOIN Product ON Orders.productId = Product.id
+
+SELECT *
+FROM Orders FULL OUTER JOIN Product ON Orders.productId = Product.id
 {% endhighlight %}
       </td>
     </tr>
@@ -408,8 +426,6 @@ FROM Orders LEFT JOIN Product ON Orders.productId = Product.id
           <li><code>ltime &gt;= rtime AND ltime &lt; rtime + INTERVAL '10' MINUTE</code></li>
           <li><code>ltime BETWEEN rtime - INTERVAL '10' SECOND AND rtime + INTERVAL '5' SECOND</code></li>
         </ul>
-                
-        <p><b>Note:</b> Currently, only <code>INNER</code> time-windowed joins are supported.</p>
 
 {% highlight sql %}
 SELECT *
@@ -1347,6 +1363,19 @@ LOG10(numeric)
 
     <tr>
       <td>
+       {% highlight text %}
+LOG(x numeric)
+LOG(b numeric, x numeric)
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the logarithm of a <i>numeric</i>.</p>
+        <p>If called with one parameter, this function returns the natural logarithm of <code>x</code>. If called with two parameters, this function returns the logarithm of <code>x</code> to the base <code>b</code>. <code>x</code> must be greater than 0. <code>b</code> must be greater than 1.</p>
+      </td>
+    </tr>
+
+    <tr>
+      <td>
         {% highlight text %}
 EXP(numeric)
 {% endhighlight %}
@@ -1566,15 +1595,15 @@ RAND_INTEGER(seed integer, bound integer)
    </tr>
 
     <tr>
-     <td>
-       {% highlight text %}
-LOG(x numeric), LOG(base numeric, x numeric)
-{% endhighlight %}
-     </td>
-    <td>
-      <p>Returns the natural logarithm of a specified number of a specified base. If called with one parameter, this function returns the natural logarithm of <code>x</code>. If called with two parameters, this function returns the logarithm of <code>x</code> to the base <code>b</code>. <code>x</code> must be greater than 0. <code>b</code> must be greater than 1.</p>
-    </td>
-   </tr>
+      <td>
+{% highlight text %}
+BIN(numeric)
+      {% endhighlight %}
+      </td>
+      <td>
+        <p>Returns a string representation of an integer numeric value in binary format. Returns null if numeric is null. E.g. "4" leads to "100", "12" leads to "1100".</p>
+      </td>
+    </tr>
 
   </tbody>
 </table>
@@ -1728,6 +1757,27 @@ CONCAT_WS(separator, string1, string2,...)
       </td>
       <td>
         <p>Returns the string that results from concatenating the arguments using a separator. The separator is added between the strings to be concatenated. Returns NULL If the separator is NULL. CONCAT_WS() does not skip empty strings. However, it does skip any NULL argument. E.g. <code>CONCAT_WS("~", "AA", "BB", "", "CC")</code> returns <code>AA~BB~~CC</code></p>
+  </td>
+    </tr>
+
+        <tr>
+      <td>
+        {% highlight text %}
+LPAD(text string, len integer, pad string)
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the string text left-padded with the string pad to a length of len characters. If text is longer than len, the return value is shortened to len characters. E.g. <code>LPAD('hi',4,'??')</code> returns <code>??hi</code>, <code>LPAD('hi',1,'??')</code> returns <code>h</code>.</p>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        {% highlight text %}
+RPAD(text string, len integer, pad string)
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the string text right-padded with the string pad to a length of len characters. If text is longer than len, the return value is shortened to len characters. E.g. <code>RPAD('hi',4,'??')</code> returns <code>hi??</code>, <code>RPAD('hi',1,'??')</code> returns <code>h</code>.</p>
       </td>
     </tr>
 
@@ -1819,43 +1869,6 @@ CAST(value AS type)
     </tr>
   </tbody>
 </table>
-
-<!-- Disabled temporarily in favor of composite type support
-<table class="table table-bordered">
-  <thead>
-    <tr>
-      <th class="text-left" style="width: 40%">Value constructor functions</th>
-      <th class="text-center">Description</th>
-    </tr>
-  </thead>
-
-  <tbody>
-  
-    <tr>
-      <td>
-        {% highlight text %}
-ROW (value [, value]* )
-{% endhighlight %}
-      </td>
-      <td>
-        <p>Creates a row from a list of values.</p>
-      </td>
-    </tr>
-
-    <tr>
-      <td>
-        {% highlight text %}
-(value [, value]* )
-{% endhighlight %}
-      </td>
-      <td>
-        <p>Creates a row from a list of values.</p>
-      </td>
-    </tr>
-
-  </tbody>
-</table>
--->
 
 <table class="table table-bordered">
   <thead>
@@ -2385,6 +2398,50 @@ map ‘[’ key ‘]’
       </td>
       <td>
         <p>Returns the value specified by a particular key in a map.</p>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style="width: 40%">Hash functions</th>
+      <th class="text-center">Description</th>
+    </tr>
+  </thead>
+
+  <tbody>
+    <tr>
+      <td>
+        {% highlight text %}
+MD5(string)
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the MD5 hash of the string argument as a string of 32 hexadecimal digits; null if <i>string</i> is null.</p>
+      </td>
+    </tr>
+
+    <tr>
+      <td>
+        {% highlight text %}
+SHA1(string)
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the SHA-1 hash of the string argument as a string of 40 hexadecimal digits; null if <i>string</i> is null.</p>
+      </td>
+    </tr>
+    
+    <tr>
+      <td>
+        {% highlight text %}
+SHA256(string)
+{% endhighlight %}
+      </td>
+      <td>
+        <p>Returns the SHA-256 hash of the string argument as a string of 64 hexadecimal digits; null if <i>string</i> is null.</p>
       </td>
     </tr>
   </tbody>

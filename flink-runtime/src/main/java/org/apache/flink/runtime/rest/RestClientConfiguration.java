@@ -19,6 +19,7 @@
 package org.apache.flink.runtime.rest;
 
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.RestOptions;
 import org.apache.flink.configuration.SecurityOptions;
 import org.apache.flink.runtime.net.SSLUtils;
 import org.apache.flink.util.ConfigurationException;
@@ -28,6 +29,8 @@ import javax.annotation.Nullable;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 
+import static org.apache.flink.util.Preconditions.checkArgument;
+
 /**
  * A configuration object for {@link RestClient}s.
  */
@@ -36,8 +39,18 @@ public final class RestClientConfiguration {
 	@Nullable
 	private final SSLEngine sslEngine;
 
-	private RestClientConfiguration(@Nullable SSLEngine sslEngine) {
+	private final long connectionTimeout;
+
+	private final int maxContentLength;
+
+	private RestClientConfiguration(
+			@Nullable final SSLEngine sslEngine,
+			final long connectionTimeout,
+			final int maxContentLength) {
+		checkArgument(maxContentLength > 0, "maxContentLength must be positive, was: %d", maxContentLength);
 		this.sslEngine = sslEngine;
+		this.connectionTimeout = connectionTimeout;
+		this.maxContentLength = maxContentLength;
 	}
 
 	/**
@@ -48,6 +61,22 @@ public final class RestClientConfiguration {
 
 	public SSLEngine getSslEngine() {
 		return sslEngine;
+	}
+
+	/**
+	 * @see RestOptions#CONNECTION_TIMEOUT
+	 */
+	public long getConnectionTimeout() {
+		return connectionTimeout;
+	}
+
+	/**
+	 * Returns the max content length that the REST client endpoint could handle.
+	 *
+	 * @return max content length that the REST client endpoint could handle
+	 */
+	public int getMaxContentLength() {
+		return maxContentLength;
 	}
 
 	/**
@@ -76,6 +105,10 @@ public final class RestClientConfiguration {
 			}
 		}
 
-		return new RestClientConfiguration(sslEngine);
+		final long connectionTimeout = config.getLong(RestOptions.CONNECTION_TIMEOUT);
+
+		int maxContentLength = config.getInteger(RestOptions.CLIENT_MAX_CONTENT_LENGTH);
+
+		return new RestClientConfiguration(sslEngine, connectionTimeout, maxContentLength);
 	}
 }

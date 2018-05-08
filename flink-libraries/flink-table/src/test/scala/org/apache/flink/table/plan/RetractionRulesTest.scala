@@ -250,17 +250,21 @@ class RetractionRulesTest extends TableTestBase {
     val expected =
       unaryNode(
         "DataStreamGroupAggregate",
-        unaryNode(
-          "DataStreamCalc",
-          binaryNode(
-            "DataStreamUnion",
+        binaryNode(
+          "DataStreamUnion",
+          unaryNode(
+            "DataStreamCalc",
             unaryNode(
               "DataStreamGroupAggregate",
               "DataStreamScan(true, Acc)",
               "true, AccRetract"
             ),
-            "DataStreamScan(true, Acc)",
             "true, AccRetract"
+          ),
+          unaryNode(
+            "DataStreamCalc",
+            "DataStreamScan(true, Acc)",
+            "true, Acc"
           ),
           "true, AccRetract"
         ),
@@ -269,7 +273,41 @@ class RetractionRulesTest extends TableTestBase {
 
     util.verifyTableTrait(resultTable, expected)
   }
+
+  @Test
+  def testJoin(): Unit = {
+    val util = streamTestForRetractionUtil()
+    val lTable = util.addTable[(Int, Int)]('a, 'b)
+    val rTable = util.addTable[(Int, Int)]('bb, 'c)
+
+    val lTableWithPk = lTable
+      .groupBy('a)
+      .select('a, 'b.max as 'b)
+
+    val resultTable = lTableWithPk
+      .join(rTable)
+      .where('b === 'bb)
+      .select('a, 'b, 'c)
+
+    val expected =
+      unaryNode(
+        "DataStreamCalc",
+        binaryNode(
+          "DataStreamJoin",
+          unaryNode(
+            "DataStreamGroupAggregate",
+            "DataStreamScan(true, Acc)",
+            "true, AccRetract"
+          ),
+          "DataStreamScan(true, Acc)",
+          "false, AccRetract"
+        ),
+        "false, AccRetract"
+      )
+    util.verifyTableTrait(resultTable, expected)
+  }
 }
+
 
 class StreamTableTestForRetractionUtil extends StreamTableTestUtil {
 
